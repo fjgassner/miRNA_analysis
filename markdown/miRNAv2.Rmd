@@ -195,7 +195,7 @@ In der MSig Dtenbank werden die Gene in 8 große Gruppen eingeordnet:
   
 Für dieses Beispiel werden die Gruppen H, C2, C6 und C7 verwendet. Man kann die Gruppen einzeln oder als .zip File auf http://software.broadinstitute.org/gsea/msigdb runterladen.
 
-```{r MSigDB ,cache=TRUE, message=FALSE, eval = FALSE}
+```{r MSigDB ,cache=TRUE, message=FALSE}
 gmtH<-read.gmt("~/Documents/miRNA_analysen/target_prediction/GSEA_mSigDB/h.all.v7.0.entrez.gmt")
 egmtH<-enricher(demiRNAEntrez$ENTREZID, TERM2GENE = gmtH)
 hResult<-egmtH@result
@@ -222,22 +222,22 @@ write.table(c7Result, "~/Documents/miRNA_analysen/target_prediction/results/Oncy
 ```
 
 #### hallmark gene sets
-```{r display MSigDB H, echo=FALSE, eval=FALSE}
+```{r display MSigDB H, echo=FALSE}
 datatable(hResult, rownames = FALSE, filter = "top", options = list(pageLength = 5, scrollX = T))
 ```
 
 #### curated gene sets
-```{r display MSigDB 2, echo=FALSE, eval=FALSE}
+```{r display MSigDB 2, echo=FALSE}
 datatable(c2Result, rownames = FALSE, filter = "top", options = list(pageLength = 5, scrollX = T))
 ```
 
 #### oncogenic signatures
-```{r display MSigDB 6, echo=FALSE, eval=FALSE}
+```{r display MSigDB 6, echo=FALSE}
 datatable(c6Result, rownames = FALSE, filter = "top", options = list(pageLength = 5, scrollX = T))
 ```
 
 #### immunologic signatures
-```{r display MSigDB 7, echo=FALSE, eval=FALSE}
+```{r display MSigDB 7, echo=FALSE}
 datatable(c7Result, rownames = FALSE, filter = "top", options = list(pageLength = 5, scrollX = T))
 ```
   
@@ -255,7 +255,7 @@ Diese müssen zu zwei großen Listen verbunden werden. Dabei werden auch gleichz
 
 Außerdem wird in einem Balkendiagram dargestellt, ob gewisse miRNAs nur in CLL oder nur in B-Zellen editiert sind.
 
-```{r combineFiles, cache=TRUE, message=FALSE, warning=FALSE, error=FALSE}
+```{r combineFiles, cache=TRUE, message=FALSE, warning=FALSE, error=FALSE, results='hide'}
 
 # Erzeugen der leeren data frames
 editedFile<-data.frame(Sample = character(),
@@ -279,14 +279,14 @@ crtFile<-data.frame(Sample=character(),
 ####################################
 #MAIN LOOP
 ####################################
-filenames<-list.dirs("~/Documents/miRNA_analysen/miRNA_editing/data/", full.names = FALSE, recursive = FALSE)
+filenames<-list.dirs("~/Documents/miRNA_analysen/data/", full.names = FALSE, recursive = FALSE)
 
 for(i in 1:length(filenames))
 {
   
   # editing info
   
-  file<-read.delim(paste0("~/Documents/miRNA_analysen/miRNA_editing/data/", filenames[i], "/", filenames[i], ".editing_info.txt"), header=TRUE, sep="\t")
+  file<-read.delim(paste0("~/Documents/miRNA_analysen/data/", filenames[i], "/", filenames[i], ".editing_info.txt"), header=TRUE, sep="\t")
   
   # tryCatch verhindert abbruch, falls keine Daten vorhaned sein sollten
   tryCatch(
@@ -303,7 +303,7 @@ for(i in 1:length(filenames))
   
   tryCatch(
   {
-    file<-read.delim(paste0("~/Documents/miRNA_analysen/miRNA_editing/data/", filenames[i], "/", filenames[i], ".crt_counts.txt"), header=TRUE, sep="\t")
+    file<-read.delim(paste0("~/Documents/miRNA_analysen/data/", filenames[i], "/", filenames[i], ".crt_counts.txt"), header=TRUE, sep="\t")
     keep<-grep("_e", file$miRNA_form)
     file<-file[keep, ]
     tryCatch(
@@ -354,13 +354,13 @@ rm(graph)
 Nach manueller Überprüfung der editierten Sequenzen auf Artefakte/mismatches, werden die Editing levels in ein data frame geschrieben, mit den Sample IDs als Zeilen und den miRNAs als Spalten und die entfernten miRNAs ausgefiltert.
 Beim Clustern muss durch probieren herausgefunden werden, wie viele Cluster bei einer Probe geeignet sind. Das geschieht durch den k.max Parameter.
 
-```{r heatmap editing, cache=TRUE, message=FALSE}
+```{r heatmap editing, cache=TRUE, message=FALSE, results='hide'}
 #laden der geprüften miRNAs
 checked<-read.delim("~/Documents/miRNA_analysen/miRNA_editing/miRNA_checked.txt", header=FALSE)
 maxCluster<-4
 
 # data frame bauen
-patList<-unique(editedFile$Sample)
+patList<-filenames
 mirList<-unique(editedFile$miRNA)
 editedData<-data.frame(matrix(ncol = length(patList), 
                              nrow = length(mirList)))
@@ -429,11 +429,11 @@ Zuerst wird nach dem IgVH Status sortiert.
 ```{r edit_IgVH, cache=TRUE, results='hide'}
 #erstellen der Liste zum Sortieren
 clinData<-read.delim("~/Documents/2019_11_29_Revlirit_master_table.v9.txt")
-sortData<-data.frame(matrix(c(rep("NAME", 53), rep("B-CELL", 53)), 
-                            nrow = 53, 
+sortData<-data.frame(matrix(c(rep("NAME", 67), rep("B-CELL", 67)), 
+                            nrow = 67, 
                             ncol=2))
 sortData[1:44, 1]<-conversion[, 1]
-sortData[45:53, 1]<-colnames(editedData)[45:53]
+sortData[45:67, 1]<-colnames(editedData)[45:67]
 colnames(sortData)<-c("PatientID", "Sorting")
 
 sortData<-merge(x=sortData, 
@@ -441,12 +441,19 @@ sortData<-merge(x=sortData,
                 by="PatientID", 
                 all.x=TRUE)
 sortData[1:44, 2]<-sortData[1:44, 3]
+sortData[which(is.na(sortData$Sorting)), 2]<-"_na"
+# Patienten, die keine editierte miRNA haben, extra sortieren
+editedDataZero<-editedData
+editedDataZero[is.na(editedDataZero)]<-0
+sortData$hasData<-colSums(editedDataZero) != 0
+rm(editedDataZero)
+
 rownames(sortData)<-sortData$PatientID
 annotation<-data.frame(sortData$Sorting)
 rownames(annotation)<-sortData$PatientID
 colnames(annotation)<-"Mutations Status"
 
-pheatmap(editedData[,sortData$PatientID[order(sortData$Sorting)]], #durch den order Befehl können andere CLuster verfahren als von pheatmap verwendet werden
+pheatmap(editedData[,sortData$PatientID[order(sortData$Sorting, sortData$hasData)]], #durch den order Befehl können andere CLuster verfahren als von pheatmap verwendet werden
          cluster_rows = FALSE, 
          cluster_cols = FALSE, 
          filename = "~/Documents/miRNA_analysen/miRNA_editing/graphics/editing_IgVH.pdf", 
@@ -457,7 +464,7 @@ dev.off()
 ```
 
 ```{r IgVH_heat, echo=FALSE}
-pheatmap(editedData[,sortData$PatientID[order(sortData$Sorting)]],
+pheatmap(editedData[,sortData$PatientID[order(sortData$Sorting, sortData$hasData)]],
          cluster_rows = FALSE, 
          cluster_cols = FALSE,
          annotation_col = annotation)
@@ -513,9 +520,10 @@ pheatmap(graphDataDE[, 1:67],
 
 Nach demselben Prinzip wie oben wurden auch diese Daten nach Mutationsstatus geordnet.
 
-```{r DE_dispHeatSort, echo=FALSE}
+```{r DE_dispHeatSort, echo=FALSE, results='hide'}
 
 sortData[1:44, 2]<-sortData[1:44, 3]
+sortData[which(is.na(sortData$Sorting)), 2]<-"_na"
 annotation[, 1]<-sortData$Sorting
 colnames(annotation)<-"IgVH Status"
 pheatmap(graphDataDE[,sortData$PatientID[order(sortData$Sorting)]],
@@ -601,12 +609,110 @@ kaplanmeierPlotPFS<-
              font.legend=c(8,"plain","black")
              )
 
-pdf("~/Documents/miRNA_analysen/miRNA_editing/graphics/kaplanmeier.pdf")
-kaplanmeierPlotTTFT
-kaplanmeierPlotPFS
-dev.off()
 ```
 ```{r kaplan-meier-disp, echo=FALSE}
 kaplanmeierPlotTTFT
 kaplanmeierPlotPFS
+```
+
+### Vergleich zwischen editierten miRNAs
+
+Hier werden die die Patienten in 2 Gruppen geteilt, ne nachdem, ob eine gewisse miRNA editiert ist oder nicht. Hier werden verwendet:  
+*hsa-miR-1260b
+*hsa-miR-5100
+
+```{r kaplan-meier edited}
+# editing status
+for(i in 1:67)
+{
+  sortData[i, "m1260b"]<-if(is.na(editedData[1, i])) "unedited" else "edited"
+  sortData[i, "m5100"]<-if(is.na(editedData[2, i])) "unedited" else "edited"
+}
+
+kaplanmeierDataTTFT<-survfit(Surv(TTFT,TTFT_censor) ~m1260b, data=sortData)
+kaplanmeierPlotTTFT1260b<-
+  ggsurvplot(kaplanmeierDataTTFT,
+             risk.table=F,
+             ncensor.plot=F,
+             pval=T,
+             palette="jco",
+             surv.median.line="v",
+             xlab="TTFT from diagnosis, months",
+             ylab="untreated fraction",
+             legend="bottom",
+             pval.coord=c(60,0.9),
+             legend.title="",
+             conf.int.alpha=0.1,
+             font.legend=c(8,"plain","black")
+             )
+
+kaplanmeierDataPFS<-survfit(Surv(PFS_time_months, PFS_1_is_event) ~m1260b, data=sortData)
+kaplanmeierPlotPFS1260b<-
+  ggsurvplot(kaplanmeierDataPFS,
+             risk.table=F,
+             ncensor.plot=F,
+             pval=T,
+             palette="jco",
+             surv.median.line="v",
+             xlab="PFS, months",
+             ylab="untreated fraction",
+             legend="bottom",
+             pval.coord=c(60,0.9),
+             legend.title="",
+             conf.int.alpha=0.1,
+             font.legend=c(8,"plain","black")
+             )
+```
+
+Analog wird mit  hsa-miR-5100 verfahren
+
+```{r kaplan-meier 5100, echo=FALSE}
+kaplanmeierDataTTFT<-survfit(Surv(TTFT,TTFT_censor) ~m5100, data=sortData)
+kaplanmeierPlotTTFT5100<-
+  ggsurvplot(kaplanmeierDataTTFT,
+             risk.table=F,
+             ncensor.plot=F,
+             pval=T,
+             palette="jco",
+             surv.median.line="v",
+             xlab="TTFT from diagnosis, months",
+             ylab="untreated fraction",
+             legend="bottom",
+             pval.coord=c(60,0.9),
+             legend.title="",
+             conf.int.alpha=0.1,
+             font.legend=c(8,"plain","black")
+             )
+
+kaplanmeierDataPFS<-survfit(Surv(PFS_time_months, PFS_1_is_event) ~m5100, data=sortData)
+kaplanmeierPlotPFS5100<-
+  ggsurvplot(kaplanmeierDataPFS,
+             risk.table=F,
+             ncensor.plot=F,
+             pval=T,
+             palette="jco",
+             surv.median.line="v",
+             xlab="PFS, months",
+             ylab="untreated fraction",
+             legend="bottom",
+             pval.coord=c(60,0.9),
+             legend.title="",
+             conf.int.alpha=0.1,
+             font.legend=c(8,"plain","black")
+             )
+
+kaplanmeierPlotTTFT1260b
+kaplanmeierPlotPFS1260b
+kaplanmeierPlotTTFT5100
+kaplanmeierPlotPFS5100
+```
+```{r export kaplan-meier, results='hide'}
+pdf("~/Documents/miRNA_analysen/miRNA_editing/graphics/kaplanmeier.pdf")
+kaplanmeierPlotTTFT
+kaplanmeierPlotPFS
+kaplanmeierPlotTTFT1260b
+kaplanmeierPlotPFS1260b
+kaplanmeierPlotTTFT5100
+kaplanmeierPlotPFS5100
+dev.off()
 ```
