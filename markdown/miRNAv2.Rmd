@@ -1,0 +1,612 @@
+---
+title: "miRNA_v2"
+author: "Daniel Feldbacher"
+date: "17/01/2020"
+output: html_document
+---
+
+# Analyse von miRNA/mRNA Interaktionen
+
+## Laden der Libraries und setzen der Pfade
+```{r libraries, message=FALSE}
+library(miRLAB)
+library(ggplot2)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(survival)
+library(survminer)
+library(pheatmap)
+library(factoextra)
+library(RColorBrewer)
+
+options(stringsAsFactors = FALSE)
+```
+```{r lib_hidden, message=FALSE, echo=FALSE}
+library(DT)
+library(formattable)
+```
+
+```{r miRLAB Pfade, cache=TRUE}
+dataPath<-"~/Documents/miRNA_analysen/target_prediction/Oncotyrol_combined_numeric.csv"
+```
+
+## Laden und Vorbereiten der Daten
+* in den Zeilen stehen die Patienten/Proben, in den Spalten die einzelnen miRNAs  
+* miRNAs und mRNAs müssen in zu einer Tabelle vereinigt werden  
+* die Daten müssen in den numeric type konvertiert werden  
+
+Es werden nur jene miRNAs verwendet, die in zumindest einer Probe mindestens 10 Mal vorkommen.
+
+```{r merge data, cache=TRUE}
+miRNA<-read.delim("~/Documents/Oncotyrol_miRNA_editing/Oncotyrol_miARma.cut_bw1_ReadCount.tab")
+miRNA<-miRNA[rowSums(miRNA >= 10) >= 1, ]
+miRNA<-data.frame(t(miRNA)) #Zeilen und Spalten tauschen
+
+mRNA<-read.delim("~/Documents/RNAedit/RNA_editing_R_project/2018_12_20_norm_counts.txt")
+mRNA[ , 4]<-NULL #!!Nur für diese Datei notwendig, da der Patient bei den miRNAs fehlt!!
+mRNA<-data.frame(t(mRNA)) #Zeilen und Spalten tauschen
+
+combined<-cbind(miRNA, mRNA)
+combined<-lapply(combined, as.numeric)
+
+#Kombinierte Daten in ein CSV schreiben; ohne Zeilennamen!
+write.table(combined, dataPath, row.names = FALSE, sep = ",")
+```
+
+## Berechnen des Pearson Koeffizienten
+Zuerst werden zwei Variablen erstellt, welche die Spalten in miRNA und mRNA teilen.
+Danach werden die Korrelationen zwischen allen miRNA/mRNA Paaren brechnet, sowie die 100 stärksten Korrelationen extrahiert.
+
+```{r Peasron, cache=TRUE, message=FALSE}
+cause<-1:ncol(miRNA)
+effect<-(ncol(miRNA) + 1):ncol(as.data.frame(combined))
+pearson<-Pearson(dataPath, cause, effect)
+pearsonTop<-Extopk(pearson, 100)
+
+write.table(pearsonTop, "~/Documents/miRNA_analysen/target_prediction/results/Pearson_top100.txt", quote = FALSE, sep="\t", row.names = FALSE)
+```
+
+Als Illustration sind hier die ersten 10 Einträge abgebildet. Zur Erläuterung: in der vierten Spalte ist der Betrag des Korrelationskoeffizienten eingetragen, damit die Einträge geordnet werden können. Ansonsten würden positive Korrelationen immer über negative gestellt werden.
+
+```{r display top 10, echo=FALSE, message=FALSE}
+top10<-pearsonTop[1:10, ]
+colnames(top10)<-c("miRNA", "mRNA", "Korr.", "Betrag d. Korr.")
+formattable(as.data.frame(top10))
+rm(top10)
+```
+
+## Verarbeiten der Ergebnisse
+### a) Verbinden mit Expressionsdaten von miRNA
+
+In dieser Darstellung werden miRNAs, die in CLL und B-Zellen unterschiedlich exprimiert werden, mit jener mRNA Verbunden, die damit am stärksten korreliert.
+Von den Expressionsdaten werden nur diejenigen verwendet, die eine False Discovery Rate von < 0.01 besitzen.
+Des weiteren werden die Daten mit einem so genannten left join verbunden. Also werden alle Zeilen der ersten Tabelle(Expressionsdaten) verwendet und diesen, wenn verfügbar, die Daten der zweiten Tabelle(Korrelationen) angehängt.
+
+```{r match genes, cache=TRUE}
+#Für jede miRNA wird die am stärksten korrelierende mRNA in eine Tabelle geschrieben
+
+#Erstellen des leeren Data Frames
+topList<-data.frame(
+  miRNA = character(), 
+  Gene = character(), 
+  Corr = numeric())
+
+for(i in 1:ncol(pearson))
+{
+  #Für die Sortierung muss der Betrag der Korrelation verwendet werden(siehe oben)
+  current<-pearson[, i]
+  ordered<-lapply(current, abs)
+  ordered<-ordered[order(unlist(ordered), decreasing = TRUE)]
+  
+  #Folgender Werte werden in die Tabelle geschrieben:
+  #miRNA Name
+  #Genname
+  #Korrelationskoeffizient
+  topList[i, 1]<-colnames(pearson)[i]
+  topList[i, 2]<-names(ordered)[1]
+  topList[i, 3]<-current[[names(ordered)[1]]]
+}
+
+#Laden der Expressionsaten:
+demiRNA<-read.delim("~/Documents/miRNA_analysen/target_prediction/Oncotyrol_cut_bw1_EdgeR_results_Type.tab.txt")
+demiRNA<-demiRNA[which(demiRNA$FDR <= 0.01), ]
+
+demiRNAInfo<-merge(x=demiRNA, y=topList, by.x="X", by.y = "miRNA", all.x = TRUE)
+write.table(demiRNAInfo, "~/Documents/miRNA_analysen/target_prediction/Oncotyrol_demiRNA.info.txt", sep="\t", quote = FALSE)
+```
+
+```{r display top 10 different expression Info, echo=FALSE}
+top10<-demiRNAInfo[1:10, ]
+formattable(top10)
+rm(top10)
+```
+
+Die Häufigkeiten der gematchten Gene werden mit einem einfachen Balkendiagramm dargestellt.
+
+```{r matched genes graph, results='hide', cache=TRUE}
+#Aus den Daten müssen die Zeilen ohne Gene entfernt werden
+graphData<-demiRNAInfo[which(!is.na(demiRNAInfo$Gene)), ]
+graph<-ggplot(graphData, aes(x=Gene)) + #legt die darzustellenden Daten fest
+  geom_bar() + #Darstellung als Balkendiagramm
+  theme(axis.text.x = element_text(angle = 90)) #dreht die X-Achsenbeschriftung um 90°, um überlappung zu verhindern
+
+pdf("~/Documents/miRNA_analysen/target_prediction/results/gene_frequency.pdf")
+print(graph)
+dev.off()
+```
+
+```{r display matched genes, echo=FALSE}
+print(graph)
+rm(graph)
+rm(graphData)
+```
+
+### b) Gene Ontology
+Durch groupGO werden die ausgewählten Gene nach verschieden Kriterien gruppiert. Zur Auswahl stehen:  
+  * MF-Molekulare Funktion des Genproduktes  
+  * CC-Zelluläre Struktur, in der das Genprodukt aktiv ist  
+  * BP-Biologische Prozesse und Pathways, an denen das Gen beteiligt ist  
+Festgelegt wird dies durch den "ont" Parameter der Funktion. In diesem Beispiel wird BP verwendet.  
+
+Zuerst müssen die IDs der Gene in das ENTREZ System umgeschrieben werden. Dies wird durch eine Funktion der clusterProfiler automatisiert.
+
+```{r entrez, warning=FALSE, cache=TRUE, message=FALSE}
+enterezIds<-bitr(demiRNAInfo$Gene, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Hs.eg.db")
+demiRNAEntrez<-merge(x = demiRNAInfo, y = enterezIds, by.x="Gene", by.y="SYMBOL", all.x=TRUE)
+
+ggo<-groupGO(gene = demiRNAEntrez$ENTREZID, OrgDb = "org.Hs.eg.db", ont = "BP", level = 3, readable = TRUE)
+```
+
+Der Output der Funktion ist ein groupGOResult Objekt. Die Ergebnisse können mit dem @result Operator als Dataframe ausgelesen werden.
+
+```{r gene ontology, cache = TRUE}
+ggoResult<-ggo@result
+ggoResult<-ggoResult[which(ggoResult$Count > 0), ]
+write.table(ggoResult, "~/Documents/miRNA_analysen/target_prediction/results/Oncotyrol_GO.txt", quote = FALSE, sep = "\t", row.names = FALSE)
+```
+```{r display gene ontology, echo=FALSE, message=FALSE}
+datatable(ggoResult, rownames = FALSE, filter = "top", options = list(pageLength = 5, scrollX = T))
+```
+
+### c) KEGG Datenbank
+Eine ähnliche Analyse lässt sich auch mit der KEGG Datenbank durchführen. Dafür werden ebenfalls ENTREZ Ids benötigt. Der Name des Organismus muss dem Code in jener entsprechen. Eine Liste der möglichen Namen findet sich unter http://www.genome.jp/kegg/catalog/org_list.html  
+**Wichtig!** Diese ID *muss* in einzelnen Anführungszeichen '' angegeben werden.
+
+```{r KEGG, chache = TRUE}
+eKEGG<-enrichKEGG(gene=demiRNAEntrez$ENTREZID, organism = 'hsa', pvalueCutoff = 0.05)
+keggResult<-eKEGG@result
+keggResult<-keggResult[which(keggResult$p.adjust <= 0.05), ]
+write.table(keggResult, "~/Documents/miRNA_analysen/target_prediction/results/Oncotyrol_KEGG.txt", sep="\t", quote = FALSE, row.names = FALSE)
+```
+```{r display KEGG, echo=FALSE}
+datatable(keggResult, rownames = FALSE, filter = "top", options = list(pageLength = 5, scrollX = T))
+```
+
+### d) MSigDb Analyse
+In der MSig Dtenbank werden die Gene in 8 große Gruppen eingeordnet:  
+  * H: hallmark gene  
+  * C1: positional gene sets  
+  * C2: curated gene sets  
+  * C3: motif gene sets  
+  * C4: computational gene sets  
+  * C5: GO gene sets  
+  * C6: oncogenic signatures  
+  * C7: immunologic signatures  
+  
+Für dieses Beispiel werden die Gruppen H, C2, C6 und C7 verwendet. Man kann die Gruppen einzeln oder als .zip File auf http://software.broadinstitute.org/gsea/msigdb runterladen.
+
+```{r MSigDB ,cache=TRUE, message=FALSE, eval = FALSE}
+gmtH<-read.gmt("~/Documents/miRNA_analysen/target_prediction/GSEA_mSigDB/h.all.v7.0.entrez.gmt")
+egmtH<-enricher(demiRNAEntrez$ENTREZID, TERM2GENE = gmtH)
+hResult<-egmtH@result
+hResult<-hResult[which(hResult$p.adjust <= 0.05),]
+write.table(hResult, "~/Documents/miRNA_analysen/target_prediction/results/Oncytyrol_GSEA_H.txt", sep="\t", quote = FALSE, row.names = FALSE)
+
+c2<-read.gmt("~/Documents/miRNA_analysen/target_prediction/GSEA_mSigDB/c2.cp.v7.0.entrez.gmt")
+eC2<-enricher(demiRNAEntrez$ENTREZID, TERM2GENE = c2)
+c2Result<-eC2@result
+c2Result<-c2Result[which(c2Result$p.adjust <= 0.05),]
+write.table(c2Result, "~/Documents/miRNA_analysen/target_prediction/results/Oncytyrol_GSEA_C2.txt", sep="\t", quote = FALSE, row.names = FALSE)
+
+c6<-read.gmt("~/Documents/miRNA_analysen/target_prediction/GSEA_mSigDB/c6.all.v7.0.entrez.gmt")
+eC6<-enricher(demiRNAEntrez$ENTREZID, TERM2GENE = c6)
+c6Result<-eC6@result
+c6Result<-c6Result[which(c6Result$p.adjust <= 0.05),]
+write.table(c6Result, "~/Documents/miRNA_analysen/target_prediction/results/Oncytyrol_GSEA_C6.txt", sep="\t", quote = FALSE, row.names = FALSE)
+
+c7<-read.gmt("~/Documents/miRNA_analysen/target_prediction/GSEA_mSigDB/c7.all.v7.0.entrez.gmt")
+eC7<-enricher(demiRNAEntrez$ENTREZID, TERM2GENE = c7)
+c7Result<-eC7@result
+c7Result<-c7Result[which(c7Result$p.adjust <= 0.05),]
+write.table(c7Result, "~/Documents/miRNA_analysen/target_prediction/results/Oncytyrol_GSEA_C7.txt", sep="\t", quote = FALSE, row.names = FALSE)
+```
+
+#### hallmark gene sets
+```{r display MSigDB H, echo=FALSE, eval=FALSE}
+datatable(hResult, rownames = FALSE, filter = "top", options = list(pageLength = 5, scrollX = T))
+```
+
+#### curated gene sets
+```{r display MSigDB 2, echo=FALSE, eval=FALSE}
+datatable(c2Result, rownames = FALSE, filter = "top", options = list(pageLength = 5, scrollX = T))
+```
+
+#### oncogenic signatures
+```{r display MSigDB 6, echo=FALSE, eval=FALSE}
+datatable(c6Result, rownames = FALSE, filter = "top", options = list(pageLength = 5, scrollX = T))
+```
+
+#### immunologic signatures
+```{r display MSigDB 7, echo=FALSE, eval=FALSE}
+datatable(c7Result, rownames = FALSE, filter = "top", options = list(pageLength = 5, scrollX = T))
+```
+  
+***
+
+# Analyse von miRNA editing
+## Daten zusammen fassen
+
+Die Analyse mit miRmedon erzeugt für jede Probe 2 Dateien, welche für diesen Schritt wichtig sind:
+
+* crt_counts.txt
+* editing_info.txt
+
+Diese müssen zu zwei großen Listen verbunden werden. Dabei werden auch gleichzeitig die Reads gefiltert. Zum einen sollen pro Probe/miRNA Paar mindestens 5 Reads vorkommen. Zusätlich soll in der Editing Info mindestens 1% der Reads editiert sein.
+
+Außerdem wird in einem Balkendiagram dargestellt, ob gewisse miRNAs nur in CLL oder nur in B-Zellen editiert sind.
+
+```{r combineFiles, cache=TRUE, message=FALSE, warning=FALSE, error=FALSE}
+
+# Erzeugen der leeren data frames
+editedFile<-data.frame(Sample = character(),
+                    type = character(),
+                    miRNA = character(),
+                    position = integer(),
+                    edited = numeric(),
+                    unedited = numeric(),
+                    editing_level = numeric(),
+                    LCI = numeric(),
+                    UCI = numeric(),
+                    p_value = numeric())
+
+crtFile<-data.frame(Sample=character(),
+                    type=character(),
+                    miRNA=character(),
+                    count=numeric(),
+                    sequence=character(),
+                    editing_info=character())
+
+####################################
+#MAIN LOOP
+####################################
+filenames<-list.dirs("~/Documents/miRNA_analysen/miRNA_editing/data/", full.names = FALSE, recursive = FALSE)
+
+for(i in 1:length(filenames))
+{
+  
+  # editing info
+  
+  file<-read.delim(paste0("~/Documents/miRNA_analysen/miRNA_editing/data/", filenames[i], "/", filenames[i], ".editing_info.txt"), header=TRUE, sep="\t")
+  
+  # tryCatch verhindert abbruch, falls keine Daten vorhaned sein sollten
+  tryCatch(
+  {
+    file[ , 3:10]<-file[ , 1:8]
+    file[ , 1]<-filenames[i]
+    file[ ,2]<-if(i <= 44) "CLL" else "B_Cell"
+    editedFile<-rbind(editedFile, file)
+  }, error=function(e){
+    print(paste0("Error! Sample ", filenames[i], " has no data! Skipping sample!"))
+    })
+  
+  #crt_counts
+  
+  tryCatch(
+  {
+    file<-read.delim(paste0("~/Documents/miRNA_analysen/miRNA_editing/data/", filenames[i], "/", filenames[i], ".crt_counts.txt"), header=TRUE, sep="\t")
+    keep<-grep("_e", file$miRNA_form)
+    file<-file[keep, ]
+    tryCatch(
+    {
+      file[, 3:6]<-file[, 1:4]
+      file[, 1]<-filenames[i]
+      file[, 2]<-if(i <= 44) "CLL" else "B_Cell"
+      crtFile<-rbind(crtFile, file)
+    }, error=function(e){
+     warning(paste0("Warning! Sample ", filenames[i], " contains no data matching the criteria! Skipping Sample!")) 
+    })
+  }, error=function(e){
+    warning(paste0("Warning! File ", filenames[i], ".crt_counts.txt does not exist! Skipping file!"))
+  })
+}
+
+#filtern und abspeichern der Tabellen
+
+colnames(editedFile)<-c("Sample", "Type", "miRNA", "Position", "Edited", "Unedited", "Editing_Level", "LCI", "UCI", "p_value")
+keep<-which((editedFile$Edited >= 5.0) & (editedFile$Editing_Level >= 0.01))
+editedFile<-editedFile[keep, ]
+write.table(editedFile, "~/Documents/miRNA_analysen/miRNA_editing/total.results.txt", sep = "\t", quote = FALSE, row.names = FALSE, col.names = TRUE)
+
+
+colnames(crtFile)<-c("Sample", "Type", "miRNA", "Count", "Sequence", "Editing_Info")
+keep<-which(crtFile$Count >= 5.0)
+crtFile<-crtFile[keep, ]
+write.table(crtFile, "~/Documents/miRNA_analysen/miRNA_editing/total.crt_counts.txt", sep = "\t", quote = FALSE, row.names = FALSE, col.names = TRUE)
+#################
+#Create Diagram
+#################
+
+graphData<-editedFile[row.names(unique(editedFile[ , 1:3])), ]
+graph<-ggplot(graphData, aes(x=miRNA, color = Type, fill = Type)) +
+  geom_bar(position = position_dodge()) +
+  theme(axis.text.x = element_text(angle = 90))
+pdf("~/Documents/miRNA_analysen/miRNA_editing/graphics/editing_CLLvsBCELL.pdf")
+print(graph)
+dev.off()
+```
+
+```{r disp_graph_edited, echo=FALSE, message=FALSE}
+print(graph)
+rm(graph)
+```
+
+## Clustern und Bauen der Heatmap
+Nach manueller Überprüfung der editierten Sequenzen auf Artefakte/mismatches, werden die Editing levels in ein data frame geschrieben, mit den Sample IDs als Zeilen und den miRNAs als Spalten und die entfernten miRNAs ausgefiltert.
+Beim Clustern muss durch probieren herausgefunden werden, wie viele Cluster bei einer Probe geeignet sind. Das geschieht durch den k.max Parameter.
+
+```{r heatmap editing, cache=TRUE, message=FALSE}
+#laden der geprüften miRNAs
+checked<-read.delim("~/Documents/miRNA_analysen/miRNA_editing/miRNA_checked.txt", header=FALSE)
+maxCluster<-4
+
+# data frame bauen
+patList<-unique(editedFile$Sample)
+mirList<-unique(editedFile$miRNA)
+editedData<-data.frame(matrix(ncol = length(patList), 
+                             nrow = length(mirList)))
+colnames(editedData)<-patList
+rownames(editedData)<-mirList
+
+#mit Daten füllen
+for(i in 1:nrow(editedFile))
+{
+  x<-editedFile[i, 3]
+  y<-editedFile[i, 1]
+  editedData[x, y]<-editedFile[i, 7]
+}
+
+#Multiplikation mit 100 für Prozentwerte
+editedData<-editedData * 100
+
+#Entfernen der artefakte/mismatches
+keep<-which(checked$V2 == "verified")
+editedData<-editedData[keep, ]
+
+#Erstellen von clustern
+clusterData<-editedData
+clusterData[is.na(clusterData)]<-0
+res.hc <- eclust(na.omit(t(clusterData)), "hclust",k.max = maxCluster)
+
+# Zeichnen der Heatmap
+pheatmap(editedData[,order(res.hc$cluster)], #durch den order Befehl können andere CLuster verfahren als von pheatmap verwendet werden
+         cluster_rows = FALSE, 
+         cluster_cols = FALSE, 
+         filename = "~/Documents/miRNA_analysen/miRNA_editing/graphics/editing_heatmap.pdf", 
+         width=10, 
+         height = 6)
+dev.off()
+```
+
+```{r display editing heatmap, echo=FALSE}
+pheatmap(editedData[,order(res.hc$cluster)],
+         cluster_rows = FALSE, 
+         cluster_cols = FALSE)
+```
+
+## Clustering mit molekularen Parametern
+
+Um die Daten korrekt zu verbinden, müssen die Proben IDs der CLL Daten zur Patienten ID getauscht werden.  
+  
+**Anmerkung: !! Bei der Probennahme wurden die Tubes für die Patienten 0205 und 0211 versehentlich vertauscht. Dies wurde bei diesem Schritt richtig gestellt!!**  
+  
+```{r convert edited, cache=TRUE}
+conversion<-read.delim("~/Documents/miRNA_analysen/miRNA_editing/idConversion.txt")
+
+#anpassen der sample IDs
+colnames(editedData)<-gsub("-.*", "", colnames(editedData))
+colnames(editedData)<-gsub("_.*", "", colnames(editedData))
+
+for(i in 1:length(colnames(editedData[, 1:44])))
+{
+  sampleID<-colnames(editedData)[i]
+  colnames(editedData)[i]<-conversion[which(conversion$SampleID == sampleID), 1]
+}
+editedData<-editedData[, order(colnames(editedData))]
+```
+
+Zuerst wird nach dem IgVH Status sortiert.
+
+```{r edit_IgVH, cache=TRUE, results='hide'}
+#erstellen der Liste zum Sortieren
+clinData<-read.delim("~/Documents/2019_11_29_Revlirit_master_table.v9.txt")
+sortData<-data.frame(matrix(c(rep("NAME", 53), rep("B-CELL", 53)), 
+                            nrow = 53, 
+                            ncol=2))
+sortData[1:44, 1]<-conversion[, 1]
+sortData[45:53, 1]<-colnames(editedData)[45:53]
+colnames(sortData)<-c("PatientID", "Sorting")
+
+sortData<-merge(x=sortData, 
+                y=clinData, 
+                by="PatientID", 
+                all.x=TRUE)
+sortData[1:44, 2]<-sortData[1:44, 3]
+rownames(sortData)<-sortData$PatientID
+annotation<-data.frame(sortData$Sorting)
+rownames(annotation)<-sortData$PatientID
+colnames(annotation)<-"Mutations Status"
+
+pheatmap(editedData[,sortData$PatientID[order(sortData$Sorting)]], #durch den order Befehl können andere CLuster verfahren als von pheatmap verwendet werden
+         cluster_rows = FALSE, 
+         cluster_cols = FALSE, 
+         filename = "~/Documents/miRNA_analysen/miRNA_editing/graphics/editing_IgVH.pdf", 
+         width=10, 
+         height = 6,
+         annotation_col = annotation)
+dev.off()
+```
+
+```{r IgVH_heat, echo=FALSE}
+pheatmap(editedData[,sortData$PatientID[order(sortData$Sorting)]],
+         cluster_rows = FALSE, 
+         cluster_cols = FALSE,
+         annotation_col = annotation)
+```
+
+# Analyse von Differentieller Expression
+
+Für diese Analyse werden die Readcounts auf den Mittelwert der B-Zellen normalisiert und mit einer logarithmischen Skala dargestellt. Aufgrund des letzten Schrittes ist es wichtig, 0 Werte zu entfernen. In diesem Fall wurde entschieden, die Readcounts der betroffenen Zellen auf 1 zu setzten, wodurch die Expressionen relativ zu einander möglchst gleich bleiben.
+Es werden jene miRNAs rausgefiltert, die nicht in mindestens 3 Proben mehr als 1 read haben.
+
+```{r DE_data, cache=TRUE}
+readCounts<-read.delim("~/Documents/miRNA_analysen/miRNA_editing/cut_bw1-ReadCount.tab")
+colnames(readCounts)[1:44]<-gsub("X", "", colnames(readCounts)[1:44])
+colnames(readCounts)[1:44]<-gsub(".miRNA", "", colnames(readCounts)[1:44])
+readCounts[readCounts==0]<-1
+readCounts<-readCounts[rowSums(readCounts > 1) >= 3, ]
+
+#Mittelwert und normalisieren
+readCounts$mean<-rowSums(readCounts[, 45:67]) / 23
+readCounts[, -68]<-readCounts[, -68] / readCounts$mean
+```
+
+Um unsignifikante Änderungen zu filtern, wird ein t-Test zwischen CLL und B-Zellen durchgeführt. Als cut-off wurde 0.05 gewählt.
+
+```{r DE_heat, cache=TRUE, results='hide'}
+for(i in 1:nrow(readCounts))
+{
+  readCounts[i, "p.value"]<-t.test(x=readCounts[i, 1:44], y=readCounts[i, 45:67])$p.value
+}
+readCounts$p.adjust<-p.adjust(readCounts$p.value)
+graphDataDE<-readCounts[which(readCounts$p.adjust <= 0.05), ]
+graphDataDE[, 1:67]<-log2(graphDataDE[, 1:67])
+
+#gibt die Skalierung der Farbskala vor
+#in diesem Fall:   < -10: tief blau
+#                  > 10: tief rot
+#                 Farben ändern sich in 1er Schritten
+breaksList<-seq(-10, 10, by=1)
+pheatmap(graphDataDE[, 1:67], 
+         color = colorRampPalette(rev(brewer.pal(n=7, name = "RdYlBu")))(length(breaksList)), #erzeugt die individualisierte Farbskala
+         breaks = breaksList, 
+         filename = "~/Documents/miRNA_analysen/miRNA_editing/graphics/deHeatmap.pdf", 
+         width = 10, 
+         height = 6)
+dev.off()
+```
+
+```{r DE_dispHeat, echo=FALSE}
+pheatmap(graphDataDE[, 1:67], 
+         color = colorRampPalette(rev(brewer.pal(n=7, name = "RdYlBu")))(length(breaksList)),
+         breaks = breaksList)
+```
+
+Nach demselben Prinzip wie oben wurden auch diese Daten nach Mutationsstatus geordnet.
+
+```{r DE_dispHeatSort, echo=FALSE}
+
+sortData[1:44, 2]<-sortData[1:44, 3]
+annotation[, 1]<-sortData$Sorting
+colnames(annotation)<-"IgVH Status"
+pheatmap(graphDataDE[,sortData$PatientID[order(sortData$Sorting)]],
+         cluster_cols = FALSE,
+         color = colorRampPalette(rev(brewer.pal(n=7, name = "RdYlBu")))(length(breaksList)),
+         breaks = breaksList,
+         annotation_col = annotation)
+pheatmap(graphDataDE[,sortData$PatientID[order(sortData$Sorting)]],
+         cluster_cols = FALSE,
+         color = colorRampPalette(rev(brewer.pal(n=7, name = "RdYlBu")))(length(breaksList)),
+         breaks = breaksList,
+         annotation_col = annotation, 
+         filename = "~/Documents/miRNA_analysen/miRNA_editing/graphics/heatmapDeMut.pdf",
+         width=10,
+         height = 6)
+dev.off()
+
+```
+
+In der nächsten Darstellung werden nur jene miRNA gelisted, die in mutierten vs unmutierten IgHVs signifikant unterschiedlich exprimieren.
+
+```{r deMutComp, cache=TRUE}
+deData<-data.frame(colnames(readCounts)[1:44])
+colnames(deData)<-"PatientID"
+deData<-merge(deData, clinData[, 1:2], by="PatientID")
+
+for(i in 1:nrow(readCounts))
+{
+  tryCatch(
+  {
+    readCounts[i, "mut.p.value"]<-t.test(x=readCounts[i, which(deData$Mutation_state=="mutated_IgVH")], y=readCounts[i, which(deData$Mutation_state=="unmutated_IgVH")])$p.value
+  }, error = function(e)
+    {
+      return(NA)
+    })
+}
+
+readCounts$mut.p.adjust<-p.adjust(readCounts$mut.p.value)
+graphDataMut<-readCounts[which(readCounts$mut.p.adjust <= 0.05), ]
+print(nrow(graphDataMut))
+```
+
+In dieser Analyse wurden keine signifikanten Unterschiede festgestellt.
+
+## Zeitliche Verläufe
+
+Die Zeit bis zur ersten Behandlung sowie die progressionsfreie Zeit nach Therapie werden jeweils als Kaplan-Meier Plot dargestelle. Dabei werden die Daten in die oben berechneten Cluster sortiert.
+
+```{r kaplan-meier, cache=TRUE, results='hide'}
+sortData$miCluster<-res.hc$cluster
+
+kaplanmeierDataTTFT<-survfit(Surv(TTFT,TTFT_censor) ~miCluster, data=sortData)
+kaplanmeierPlotTTFT<-
+  ggsurvplot(kaplanmeierDataTTFT,
+             risk.table=F,
+             ncensor.plot=F,
+             pval=T,
+             palette="jco",
+             surv.median.line="v",
+             xlab="TTFT from diagnosis, months",
+             ylab="untreated fraction",
+             legend="bottom",
+             pval.coord=c(60,0.9),
+             legend.title="",
+             conf.int.alpha=0.1,
+             font.legend=c(8,"plain","black")
+             )
+
+kaplanmeierDataPFS<-survfit(Surv(PFS_time_months, PFS_1_is_event) ~miCluster, data=sortData)
+kaplanmeierPlotPFS<-
+  ggsurvplot(kaplanmeierDataPFS,
+             risk.table=F,
+             ncensor.plot=F,
+             pval=T,
+             palette="jco",
+             surv.median.line="v",
+             xlab="PFS, months",
+             ylab="untreated fraction",
+             legend="bottom",
+             pval.coord=c(60,0.9),
+             legend.title="",
+             conf.int.alpha=0.1,
+             font.legend=c(8,"plain","black")
+             )
+
+pdf("~/Documents/miRNA_analysen/miRNA_editing/graphics/kaplanmeier.pdf")
+kaplanmeierPlotTTFT
+kaplanmeierPlotPFS
+dev.off()
+```
+```{r kaplan-meier-disp, echo=FALSE}
+kaplanmeierPlotTTFT
+kaplanmeierPlotPFS
+```
