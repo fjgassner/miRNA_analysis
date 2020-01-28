@@ -352,6 +352,9 @@ rm(graph)
 
 ## Clustern und Bauen der Heatmap
 Nach manueller Überprüfung der editierten Sequenzen auf Artefakte/mismatches, werden die Editing levels in ein data frame geschrieben, mit den Sample IDs als Zeilen und den miRNAs als Spalten und die entfernten miRNAs ausgefiltert.
+
+Wenn eine miRNA bei einer Probe in der unvalids.txt vorkommt, wird die entsprechende Zella auf NA gesetzt. Alle anderen bekoomne ein editing level von 0.
+
 Beim Clustern muss durch probieren herausgefunden werden, wie viele Cluster bei einer Probe geeignet sind. Das geschieht durch den k.max Parameter.
 
 ```{r heatmap editing, cache=TRUE, message=FALSE, results='hide'}
@@ -382,6 +385,23 @@ editedData<-editedData * 100
 keep<-which(checked$V2 == "verified")
 editedData<-editedData[keep, ]
 
+#unterscheidung zwischen nicht editiert und keine Daten
+
+editedData[is.na(editedData)]<-0
+for(i in 1:nrow(editedData))
+{
+  #hole die Order, dessen unvalids.txt die miRNA enthält
+  unvalids<-system(paste0("cd ~/Documents/miRNA_analysen/data/ &&", "grep ", rownames(editedData)[i], "_ne */unvalids.txt"), intern = TRUE)
+  unvalidData<-data.frame(lapply(unvalids, function(x) strsplit(x, "\t")))
+  unvalidData<-data.frame(t(unvalidData))
+  
+  #Ordnername ausschneiden
+  unvalidData$X1<-gsub(paste0("/unvalids.txt:", rownames(editedData)[i], "_ne"), "", unvalidData$X1)
+  
+  #NAs in die betrpffenen Zellen schreiben
+  editedData[i, unvalidData$X1]<-NA
+}
+
 #Erstellen von clustern
 clusterData<-editedData
 clusterData[is.na(clusterData)]<-0
@@ -409,7 +429,7 @@ Um die Daten korrekt zu verbinden, müssen die Proben IDs der CLL Daten zur Pati
   
 **Anmerkung: !! Bei der Probennahme wurden die Tubes für die Patienten 0205 und 0211 versehentlich vertauscht. Dies wurde bei diesem Schritt richtig gestellt!!**  
   
-```{r convert edited, cache=TRUE}
+```{r convert edited, cache=FALSE}
 conversion<-read.delim("~/Documents/miRNA_analysen/miRNA_editing/idConversion.txt")
 
 #anpassen der sample IDs
@@ -426,7 +446,7 @@ editedData<-editedData[, order(colnames(editedData))]
 
 Zuerst wird nach dem IgVH Status sortiert.
 
-```{r edit_IgVH, cache=TRUE, results='hide'}
+```{r edit_IgVH, cache=FALSE, results='hide'}
 #erstellen der Liste zum Sortieren
 clinData<-read.delim("~/Documents/2019_11_29_Revlirit_master_table.v9.txt")
 sortData<-data.frame(matrix(c(rep("NAME", 67), rep("B-CELL", 67)), 
@@ -453,7 +473,7 @@ annotation<-data.frame(sortData$Sorting)
 rownames(annotation)<-sortData$PatientID
 colnames(annotation)<-"Mutations Status"
 
-pheatmap(editedData[,sortData$PatientID[order(sortData$Sorting, sortData$hasData)]], #durch den order Befehl können andere CLuster verfahren als von pheatmap verwendet werden
+pheatmap(editedData[,sortData$PatientID[order(sortData$Sorting, sortData$hasData)]], #durch den order Befehl können andere Cluster verfahren als von pheatmap verwendet werden
          cluster_rows = FALSE, 
          cluster_cols = FALSE, 
          filename = "~/Documents/miRNA_analysen/miRNA_editing/graphics/editing_IgVH.pdf", 
@@ -470,15 +490,72 @@ pheatmap(editedData[,sortData$PatientID[order(sortData$Sorting, sortData$hasData
          annotation_col = annotation)
 ```
 
+Hier wird von den gewählten miRNAs eine Expressionsheatmap erstellt.
+
+```{r expression gefilterte miRNA, cache=TRUE, results='hide'}
+readCounts<-read.delim("~/Documents/miRNA_analysen/miRNA_editing/2020_01_27_miRNA_hg38.str-ReadCount.tab")
+colnames(readCounts)[1:44]<-gsub(".miRNA_cut", "", colnames(readCounts)[1:44])
+colnames(readCounts)[1:44]<-gsub("X", "", colnames(readCounts)[1:44])
+colnames(readCounts)[45:67]<-gsub("_cut", "", colnames(readCounts)[45:67])
+
+rows<-grep("MIR", rownames(readCounts))
+rownames(readCounts)[rows]<-tolower(rownames(readCounts)[rows])
+rownames(readCounts)<-gsub("mirlet", "hsa-let-", rownames(readCounts))
+rownames(readCounts)<-gsub("mir", "hsa-miR-", rownames(readCounts))
+
+checked[, 3]<-gsub("-[0-9]p$", "", checked[, 1])
+
+
+
+#-------------------------------------
+#/////////////////////////////////////
+######################################
+#Temporärer Fix! Später Ändern!#######
+######################################
+#/////////////////////////////////////
+#-------------------------------------
+
+checked["9", 3]<-"hsa-let-7f1"
+checked["15", 3]<-"hsa-miR-101-1"
+
+
+
+graphData<-readCounts[checked[keep, 3], ]
+graphData[graphData==0]<-1
+
+#mittelwert und normalisieren
+graphData$mean<-rowSums(graphData[, 45:67]) / 23
+graphData[, -68]<-graphData[, -68] / graphData$mean
+
+#logarithmisieren
+graphData[, -68]<-log2(graphData[, -68])
+breaksList<-seq(-10, 10, by=1)
+pheatmap(graphData[,sortData$PatientID[order(sortData$Sorting)]],
+         cluster_cols = FALSE,
+         cluster_rows = FALSE,
+         color = colorRampPalette(rev(brewer.pal(n=7, name = "RdYlBu")))(length(breaksList)),
+         breaks = breaksList,
+         annotation_col = annotation, 
+         filename = "~/Documents/miRNA_analysen/miRNA_editing/graphics/selectedHeatmapDE.pdf",
+         width=10,
+         height = 6)
+dev.off()
+```
+```{r display selected heatmap, echo=FALSE}
+pheatmap(graphData[,sortData$PatientID[order(sortData$Sorting)]],
+         cluster_cols = FALSE,
+         cluster_rows = FALSE,
+         color = colorRampPalette(rev(brewer.pal(n=7, name = "RdYlBu")))(length(breaksList)),
+         breaks = breaksList,
+         annotation_col = annotation)
+```
+
 # Analyse von Differentieller Expression
 
 Für diese Analyse werden die Readcounts auf den Mittelwert der B-Zellen normalisiert und mit einer logarithmischen Skala dargestellt. Aufgrund des letzten Schrittes ist es wichtig, 0 Werte zu entfernen. In diesem Fall wurde entschieden, die Readcounts der betroffenen Zellen auf 1 zu setzten, wodurch die Expressionen relativ zu einander möglchst gleich bleiben.
 Es werden jene miRNAs rausgefiltert, die nicht in mindestens 3 Proben mehr als 1 read haben.
 
-```{r DE_data, cache=TRUE}
-readCounts<-read.delim("~/Documents/miRNA_analysen/miRNA_editing/cut_bw1-ReadCount.tab")
-colnames(readCounts)[1:44]<-gsub("X", "", colnames(readCounts)[1:44])
-colnames(readCounts)[1:44]<-gsub(".miRNA", "", colnames(readCounts)[1:44])
+```{r DE_data, cache=FALSE}
 readCounts[readCounts==0]<-1
 readCounts<-readCounts[rowSums(readCounts > 1) >= 3, ]
 
@@ -489,7 +566,7 @@ readCounts[, -68]<-readCounts[, -68] / readCounts$mean
 
 Um unsignifikante Änderungen zu filtern, wird ein t-Test zwischen CLL und B-Zellen durchgeführt. Als cut-off wurde 0.05 gewählt.
 
-```{r DE_heat, cache=TRUE, results='hide'}
+```{r DE_heat, cache=FALSE, results='hide'}
 for(i in 1:nrow(readCounts))
 {
   readCounts[i, "p.value"]<-t.test(x=readCounts[i, 1:44], y=readCounts[i, 45:67])$p.value
@@ -545,7 +622,7 @@ dev.off()
 
 In der nächsten Darstellung werden nur jene miRNA gelisted, die in mutierten vs unmutierten IgHVs signifikant unterschiedlich exprimieren.
 
-```{r deMutComp, cache=TRUE}
+```{r deMutComp, cache=FALSE}
 deData<-data.frame(colnames(readCounts)[1:44])
 colnames(deData)<-"PatientID"
 deData<-merge(deData, clinData[, 1:2], by="PatientID")
@@ -572,7 +649,7 @@ In dieser Analyse wurden keine signifikanten Unterschiede festgestellt.
 
 Die Zeit bis zur ersten Behandlung sowie die progressionsfreie Zeit nach Therapie werden jeweils als Kaplan-Meier Plot dargestelle. Dabei werden die Daten in die oben berechneten Cluster sortiert.
 
-```{r kaplan-meier, cache=TRUE, results='hide'}
+```{r kaplan-meier, cache=FALSE, results='hide'}
 sortData$miCluster<-res.hc$cluster
 
 kaplanmeierDataTTFT<-survfit(Surv(TTFT,TTFT_censor) ~miCluster, data=sortData)
@@ -617,19 +694,23 @@ kaplanmeierPlotPFS
 
 ### Vergleich zwischen editierten miRNAs
 
-Hier werden die die Patienten in 2 Gruppen geteilt, ne nachdem, ob eine gewisse miRNA editiert ist oder nicht. Hier werden verwendet:  
+Hier werden die die Patienten in 2 Gruppen geteilt. Diese wird von einem Algorithmus gemacht, basierend auf der editing tiefe.  
 *hsa-miR-1260b
 *hsa-miR-5100
+*hsa-miR-6503-3p
 
 ```{r kaplan-meier edited}
 # editing status
-for(i in 1:67)
-{
-  sortData[i, "m1260b"]<-if(is.na(editedData[1, i])) "unedited" else "edited"
-  sortData[i, "m5100"]<-if(is.na(editedData[2, i])) "unedited" else "edited"
-}
+sortData$m1260b<-t(editedData)[,1]
+sortData$m5100<-t(editedData)[,2]
+sortData$m6503<-t(editedData)[,3]
 
-kaplanmeierDataTTFT<-survfit(Surv(TTFT,TTFT_censor) ~m1260b, data=sortData)
+#time to first treatment
+cutOffData<-sortData[which(!is.na(sortData$m1260b)), ]
+survCut<-surv_cutpoint(cutOffData, time = "TTFT", event = "TTFT_censor", variables = "m1260b")
+survCat<-surv_categorize(survCut)
+
+kaplanmeierDataTTFT<-survfit(Surv(TTFT,TTFT_censor) ~m1260b, data=survCat)
 kaplanmeierPlotTTFT1260b<-
   ggsurvplot(kaplanmeierDataTTFT,
              risk.table=F,
@@ -641,12 +722,16 @@ kaplanmeierPlotTTFT1260b<-
              ylab="untreated fraction",
              legend="bottom",
              pval.coord=c(60,0.9),
-             legend.title="",
+             legend.title=paste0("Cutoff: ", round(survCut$cutpoint$cutpoint, 1), "%"),
              conf.int.alpha=0.1,
              font.legend=c(8,"plain","black")
              )
 
-kaplanmeierDataPFS<-survfit(Surv(PFS_time_months, PFS_1_is_event) ~m1260b, data=sortData)
+# progression free survival
+survCut<-surv_cutpoint(cutOffData, time = "PFS_time_months", event = "PFS_1_is_event", variables = "m1260b")
+survCat<-surv_categorize(survCut)
+
+kaplanmeierDataPFS<-survfit(Surv(PFS_time_months, PFS_1_is_event) ~m1260b, data=survCat)
 kaplanmeierPlotPFS1260b<-
   ggsurvplot(kaplanmeierDataPFS,
              risk.table=F,
@@ -658,16 +743,21 @@ kaplanmeierPlotPFS1260b<-
              ylab="untreated fraction",
              legend="bottom",
              pval.coord=c(60,0.9),
-             legend.title="",
+             legend.title=paste0("Cutoff: ", round(survCut$cutpoint$cutpoint, 1), "%"),
              conf.int.alpha=0.1,
              font.legend=c(8,"plain","black")
              )
 ```
 
-Analog wird mit  hsa-miR-5100 verfahren
+Analog wird mit hsa-miR-5100 und hsa-miR6503-3p verfahren
 
-```{r kaplan-meier 5100, echo=FALSE}
-kaplanmeierDataTTFT<-survfit(Surv(TTFT,TTFT_censor) ~m5100, data=sortData)
+```{r kaplan-meier 5100-6503, echo=FALSE}
+#5100
+cutOffData<-sortData[which(!is.na(sortData$m5100)), ]
+survCut<-surv_cutpoint(cutOffData, time = "TTFT", event = "TTFT_censor", variables = "m5100")
+survCat<-surv_categorize(survCut)
+
+kaplanmeierDataTTFT<-survfit(Surv(TTFT,TTFT_censor) ~m5100, data=survCat)
 kaplanmeierPlotTTFT5100<-
   ggsurvplot(kaplanmeierDataTTFT,
              risk.table=F,
@@ -679,12 +769,15 @@ kaplanmeierPlotTTFT5100<-
              ylab="untreated fraction",
              legend="bottom",
              pval.coord=c(60,0.9),
-             legend.title="",
+             legend.title=paste0("Cutoff: ", round(survCut$cutpoint$cutpoint, 1), "%"),
              conf.int.alpha=0.1,
              font.legend=c(8,"plain","black")
              )
 
-kaplanmeierDataPFS<-survfit(Surv(PFS_time_months, PFS_1_is_event) ~m5100, data=sortData)
+survCut<-surv_cutpoint(cutOffData, time = "PFS_time_months", event = "PFS_1_is_event", variables = "m5100")
+survCat<-surv_categorize(survCut)
+
+kaplanmeierDataPFS<-survfit(Surv(PFS_time_months, PFS_1_is_event) ~m5100, data=survCat)
 kaplanmeierPlotPFS5100<-
   ggsurvplot(kaplanmeierDataPFS,
              risk.table=F,
@@ -696,7 +789,49 @@ kaplanmeierPlotPFS5100<-
              ylab="untreated fraction",
              legend="bottom",
              pval.coord=c(60,0.9),
-             legend.title="",
+             legend.title=paste0("Cutoff: ", round(survCut$cutpoint$cutpoint, 1), "%"),
+             conf.int.alpha=0.1,
+             font.legend=c(8,"plain","black")
+             )
+
+# #6503
+cutOffData<-sortData[which(!is.na(sortData$m6503)), ]
+survCut<-surv_cutpoint(cutOffData, time = "TTFT", event = "TTFT_censor", variables = "m6503", minprop = 0)
+survCat<-surv_categorize(survCut)
+ 
+kaplanmeierDataTTFT<-survfit(Surv(TTFT,TTFT_censor) ~m6503, data=survCat)
+kaplanmeierPlotTTFT6503<-
+  ggsurvplot(kaplanmeierDataTTFT,
+             risk.table=F,
+             ncensor.plot=F,
+             pval=T,
+             palette="jco",
+             surv.median.line="v",
+             xlab="TTFT from diagnosis, months",
+             ylab="untreated fraction",
+             legend="bottom",
+             pval.coord=c(60,0.9),
+             legend.title=paste0("Cutoff: ", round(survCut$cutpoint$cutpoint, 1), "%"),
+             conf.int.alpha=0.1,
+             font.legend=c(8,"plain","black")
+             )
+
+survCut<-surv_cutpoint(cutOffData, time = "PFS_time_months", event = "PFS_1_is_event", variables = "m6503", minprop = 0)
+survCat<-surv_categorize(survCut)
+
+kaplanmeierDataPFS<-survfit(Surv(PFS_time_months, PFS_1_is_event) ~m6503, data=survCat)
+kaplanmeierPlotPFS6503<-
+  ggsurvplot(kaplanmeierDataPFS,
+             risk.table=F,
+             ncensor.plot=F,
+             pval=T,
+             palette="jco",
+             surv.median.line="v",
+             xlab="PFS, months",
+             ylab="untreated fraction",
+             legend="bottom",
+             pval.coord=c(60,0.9),
+             legend.title=paste0("Cutoff: ", round(survCut$cutpoint$cutpoint, 1), "%"),
              conf.int.alpha=0.1,
              font.legend=c(8,"plain","black")
              )
@@ -705,6 +840,8 @@ kaplanmeierPlotTTFT1260b
 kaplanmeierPlotPFS1260b
 kaplanmeierPlotTTFT5100
 kaplanmeierPlotPFS5100
+kaplanmeierPlotTTFT6503
+kaplanmeierPlotPFS6503
 ```
 ```{r export kaplan-meier, results='hide'}
 pdf("~/Documents/miRNA_analysen/miRNA_editing/graphics/kaplanmeier.pdf")
@@ -714,5 +851,10 @@ kaplanmeierPlotTTFT1260b
 kaplanmeierPlotPFS1260b
 kaplanmeierPlotTTFT5100
 kaplanmeierPlotPFS5100
+kaplanmeierPlotTTFT6503
+kaplanmeierPlotPFS6503
 dev.off()
 ```
+
+Anmerkung:
+Da hsa-miR-6503 in so wenigen Patienten überhaupt editiert ist, ist die Aussagekraft der letzten beiden Plots unabhängig vom p-Wert gering.
