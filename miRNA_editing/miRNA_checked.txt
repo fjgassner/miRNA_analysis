@@ -1,4 +1,4 @@
-hsa-miR-1260b	verified
+hsa-miR-1260b	needs investigation
 hsa-miR-29a-3p	artefact
 hsa-miR-29c-3p	artefact
 hsa-miR-5100	verified
