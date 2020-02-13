@@ -4,4 +4,12 @@ markdown/miRNAv2.log
 markdown/miRNAv2.tex
 markdown/miRNAv2_cache/
 markdown/miRNAv2_files/
+markdown/miRNAv3.html
+markdown/miRNAv3.log
+markdown/miRNAv3.tex
+markdown/miRNAv3_cache/
+markdown/miRNAv3_files/
 miRNA_editing/*.tab
+miRNA_editing/*.pl
+miRNA_editing/reference/
+miRNA_editing/editing_loop.sh

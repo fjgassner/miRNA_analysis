@@ -1,12 +1,12 @@
 hsa-miR-1260b	needs investigation
 hsa-miR-29a-3p	artefact
 hsa-miR-29c-3p	artefact
-hsa-miR-5100	verified
+hsa-miR-5100	likely artefact
 hsa-miR-125a-5p	artefact
 hsa-miR-4753-5p	misaligned
 hsa-miR-6503-3p	verified
 hsa-miR-423-5p	artefact
-hsa-let-7f-5p	verified
+hsa-let-7f-5p	likely artefact
 hsa-let-7b-3p	misaligned
 hsa-miR-30e-5p	verified
 hsa-miR-664a-5p	low AF

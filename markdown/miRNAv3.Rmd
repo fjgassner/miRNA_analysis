@@ -246,101 +246,71 @@ datatable(c7Result, rownames = FALSE, filter = "top", options = list(pageLength 
 # Analyse von miRNA editing
 ## Daten zusammen fassen
 
-Die Analyse mit miRmedon erzeugt für jede Probe 2 Dateien, welche für diesen Schritt wichtig sind:
+Die Analyse mit der Pipeline von TAU erzeugt für jede Probe eine Datei, die hier *Samplename*.binom.out.txt genannt wurde
 
-* crt_counts.txt
-* editing_info.txt
-
-Diese müssen zu zwei großen Listen verbunden werden. Dabei werden auch gleichzeitig die Reads gefiltert. Zum einen sollen pro Probe/miRNA Paar mindestens 5 Reads vorkommen. Zusätlich soll in der Editing Info mindestens 1% der Reads editiert sein.
+Diese müssen zu einer großen Liste verbunden werden. Dabei werden auch gleichzeitig die Reads gefiltert. Zum einen sollen pro Probe/miRNA Paar mindestens 5 Reads vorkommen. Zusätlich soll in der Editing Info mindestens 1% der Reads editiert sein.
 
 Außerdem wird in einem Balkendiagram dargestellt, ob gewisse miRNAs nur in CLL oder nur in B-Zellen editiert sind.
 
 ```{r combineFiles, cache=TRUE, message=FALSE, warning=FALSE, error=FALSE, results='hide'}
 
 # Erzeugen der leeren data frames
-editedFile<-data.frame(Sample = character(),
+editedCombined<-data.frame(Sample = character(),
                     type = character(),
                     miRNA = character(),
                     position = integer(),
+                    editingType = character(),
                     edited = numeric(),
                     unedited = numeric(),
                     editing_level = numeric(),
-                    LCI = numeric(),
-                    UCI = numeric(),
                     p_value = numeric())
 
-crtFile<-data.frame(Sample=character(),
-                    type=character(),
-                    miRNA=character(),
-                    count=numeric(),
-                    sequence=character(),
-                    editing_info=character())
 
 ####################################
 #MAIN LOOP
 ####################################
-filenames<-list.dirs("~/Documents/miRNA_analysen/data/", full.names = FALSE, recursive = FALSE)
+filenames<-list.dirs("~/Documents/miRNA_analysen/data/", full.names = FALSE, recursive = FALSE)[1:67]
 
 for(i in 1:length(filenames))
 {
   
   # editing info
   
-  file<-read.delim(paste0("~/Documents/miRNA_analysen/data/", filenames[i], "/", filenames[i], ".editing_info.txt"), header=TRUE, sep="\t")
+  file<-read.delim(paste0("~/Documents/miRNA_analysen/data/", filenames[i], "/", filenames[i], ".binom.out.txt"), header=TRUE, sep="\t")
   
   # tryCatch verhindert abbruch, falls keine Daten vorhaned sein sollten
   tryCatch(
   {
-    file[ , 3:10]<-file[ , 1:8]
-    file[ , 1]<-filenames[i]
-    file[ ,2]<-if(i <= 44) "CLL" else "B_Cell"
-    editedFile<-rbind(editedFile, file)
+    file[ , 13]<-filenames[i]
+    file[ ,14]<-if(i <= 44) "CLL" else "B_Cell"
+    file[, 15]<-file[, 8] / file[, 9]
+    tempFile<-file[, c(13, 14, 5, 6, 7, 8, 9, 15, 12)]
+    tempFile<-tempFile[which(tempFile$Mismatch_type == "AG" | tempFile$Mismatch_type == "UC"),]
+    
+    editedCombined<-rbind(editedCombined, tempFile)
   }, error=function(e){
     print(paste0("Error! Sample ", filenames[i], " has no data! Skipping sample!"))
     })
-  
-  #crt_counts
-  
-  tryCatch(
-  {
-    file<-read.delim(paste0("~/Documents/miRNA_analysen/data/", filenames[i], "/", filenames[i], ".crt_counts.txt"), header=TRUE, sep="\t")
-    keep<-grep("_e", file$miRNA_form)
-    file<-file[keep, ]
-    tryCatch(
-    {
-      file[, 3:6]<-file[, 1:4]
-      file[, 1]<-filenames[i]
-      file[, 2]<-if(i <= 44) "CLL" else "B_Cell"
-      crtFile<-rbind(crtFile, file)
-    }, error=function(e){
-     warning(paste0("Warning! Sample ", filenames[i], " contains no data matching the criteria! Skipping Sample!")) 
-    })
-  }, error=function(e){
-    warning(paste0("Warning! File ", filenames[i], ".crt_counts.txt does not exist! Skipping file!"))
-  })
+
 }
 
 #filtern und abspeichern der Tabellen
 
-colnames(editedFile)<-c("Sample", "Type", "miRNA", "Position", "Edited", "Unedited", "Editing_Level", "LCI", "UCI", "p_value")
-keep<-which((editedFile$Edited >= 5.0) & (editedFile$Editing_Level >= 0.01))
-editedFile<-editedFile[keep, ]
-write.table(editedFile, "~/Documents/miRNA_analysen/miRNA_editing/total.results.txt", sep = "\t", quote = FALSE, row.names = FALSE, col.names = TRUE)
+colnames(editedCombined)<-c("Sample", "Type", "miRNA", "Position", "Editing_Type", "Edited", "Unedited", "Editing_Level",  "p_value_BH")
+keep<-which((editedCombined$Edited >= 5.0) & (editedCombined$Editing_Level >= 0.01) & (editedCombined$p_value_BH <= 0.01))
+editedCombined<-editedCombined[keep, ]
+write.table(editedCombined, "~/Documents/miRNA_analysen/miRNA_editing/results_TAU.txt", sep = "\t", quote = FALSE, row.names = FALSE, col.names = TRUE)
 
 
-colnames(crtFile)<-c("Sample", "Type", "miRNA", "Count", "Sequence", "Editing_Info")
-keep<-which(crtFile$Count >= 5.0)
-crtFile<-crtFile[keep, ]
-write.table(crtFile, "~/Documents/miRNA_analysen/miRNA_editing/total.crt_counts.txt", sep = "\t", quote = FALSE, row.names = FALSE, col.names = TRUE)
 #################
 #Create Diagram
 #################
 
-graphData<-editedFile[row.names(unique(editedFile[ , 1:3])), ]
+graphData<-editedCombined[row.names(unique(editedCombined[ , 1:3])), ]
 graph<-ggplot(graphData, aes(x=miRNA, color = Type, fill = Type)) +
   geom_bar(position = position_dodge()) +
   theme(axis.text.x = element_text(angle = 90))
-pdf("~/Documents/miRNA_analysen/miRNA_editing/graphics/editing_CLLvsBCELL.pdf")
+pdf("~/Documents/miRNA_analysen/miRNA_editing/graphics/editing_CLLvsBCELL_TAU.pdf")
 print(graph)
 dev.off()
 ```
@@ -357,61 +327,87 @@ Wenn eine miRNA bei einer Probe in der unvalids.txt vorkommt, wird die entsprech
 
 Beim Clustern muss durch probieren herausgefunden werden, wie viele Cluster bei einer Probe geeignet sind. Das geschieht durch den k.max Parameter.
 
-```{r heatmap editing, cache=FALSE, message=FALSE, results='hide'}
+```{r heatmap editing, cache=TRUE, message=FALSE, results='hide', warning=FALSE}
 #laden der geprüften miRNAs
-checked<-read.delim("~/Documents/miRNA_analysen/miRNA_editing/miRNA_checked.txt", header=FALSE)
+#checked<-read.delim("~/Documents/miRNA_analysen/miRNA_editing/miRNA_checked.txt", header=FALSE)
 maxCluster<-4
 
 # data frame bauen
 patList<-filenames
-mirList<-unique(editedFile$miRNA)
+mirList<-unique(editedCombined$miRNA)
 editedData<-data.frame(matrix(ncol = length(patList), 
                              nrow = length(mirList)))
 colnames(editedData)<-patList
 rownames(editedData)<-mirList
 
 #mit Daten füllen
-for(i in 1:nrow(editedFile))
+for(i in 1:nrow(editedCombined))
 {
-  x<-editedFile[i, 3]
-  y<-editedFile[i, 1]
-  editedData[x, y]<-editedFile[i, 7]
+  x<-editedCombined[i, 3]
+  y<-editedCombined[i, 1]
+  editedData[x, y]<-editedCombined[i, 8]
 }
 
 #Multiplikation mit 100 für Prozentwerte
 editedData<-editedData * 100
 
 #Entfernen der artefakte/mismatches
-keep<-which(checked$V2 == "verified")
-editedData<-editedData[keep, ]
+
+#TODO: neue Überprüfung auf Artefakte
+
+#keep<-which(checked$V2 == "verified")
+#editedData<-editedData[keep, ]
 
 #unterscheidung zwischen nicht editiert und keine Daten
 
 editedData[is.na(editedData)]<-0
-for(i in 1:nrow(editedData))
-{
-  #hole die Order, dessen unvalids.txt die miRNA enthält
-  unvalids<-system(paste0("cd ~/Documents/miRNA_analysen/data/ &&", "grep ", rownames(editedData)[i], "_ne */unvalids.txt"), intern = TRUE)
-  unvalidData<-data.frame(lapply(unvalids, function(x) strsplit(x, "\t")))
-  unvalidData<-data.frame(t(unvalidData))
-  
-  #Ordnername ausschneiden
-  unvalidData$X1<-gsub(paste0("/unvalids.txt:", rownames(editedData)[i], "_ne"), "", unvalidData$X1)
-  
-  #NAs in die betrpffenen Zellen schreiben
-  editedData[i, unvalidData$X1]<-NA
-}
+# for(i in 1:nrow(editedData))
+# {
+#   #hole die Order, dessen unvalids.txt die miRNA enthält
+#   unvalids<-system(paste0("cd ~/Documents/miRNA_analysen/data/ &&", "grep ", rownames(editedData)[i], "_ne */unvalids.txt"), intern = TRUE)
+#   unvalidData<-data.frame(lapply(unvalids, function(x) strsplit(x, "\t")))
+#   unvalidData<-data.frame(t(unvalidData))
+#   
+#   #Ordnername ausschneiden
+#   unvalidData$X1<-gsub(paste0("/unvalids.txt:", rownames(editedData)[i], "_ne"), "", unvalidData$X1)
+#   
+#   #NAs in die betrpffenen Zellen schreiben
+#   editedData[i, unvalidData$X1]<-NA
+# }
+
+#TODO: anderes File?
+
+# for(y in 1:ncol(editedData))
+# {
+#   exprFile<-tryCatch(
+#   {
+#     read.delim(paste0("~/Documents/miRNA_analysen/data/", filenames[y], "/miRNA_expression.txt"), header = FALSE, row.names = 1)
+#   }, error=function(e){
+#     return("Skip")
+#   }
+#   )
+#   if(exprFile == "Skip")
+#   {
+#       editedData[, y]<-NA 
+#       next
+#   }
+#   for(x in 1:nrow(editedData))
+#   {
+#     if(exprFile[mirList[x], 1] == 0 | is.na(exprFile[mirList[x], 1])) editedData[x, y]<-NA
+#   }
+# }
 
 #Erstellen von clustern
 clusterData<-editedData
 clusterData[is.na(clusterData)]<-0
-res.hc <- eclust(na.omit(t(clusterData)), "hclust",k.max = maxCluster)
+res.hc <- eclust(data.frame(t(clusterData)), "hclust",k.max = maxCluster)
 
 # Zeichnen der Heatmap
 pheatmap(editedData[,order(res.hc$cluster)], #durch den order Befehl können andere CLuster verfahren als von pheatmap verwendet werden
+#pheatmap(editedData,
          cluster_rows = FALSE, 
          cluster_cols = FALSE, 
-         filename = "~/Documents/miRNA_analysen/miRNA_editing/graphics/editingCluster.pdf", 
+         filename = "~/Documents/miRNA_analysen/miRNA_editing/graphics/editingCluster_TAU.pdf", 
          width=10, 
          height = 6,
          border_color = NA)
@@ -420,6 +416,7 @@ dev.off()
 
 ```{r display editing heatmap, echo=FALSE}
 pheatmap(editedData[,order(res.hc$cluster)],
+#pheatmap(editedData,
          cluster_rows = FALSE, 
          cluster_cols = FALSE,
          border_color = NA)
@@ -427,38 +424,15 @@ pheatmap(editedData[,order(res.hc$cluster)],
 
 ## Clustering mit molekularen Parametern
 
-Um die Daten korrekt zu verbinden, müssen die Proben IDs der CLL Daten zur Patienten ID getauscht werden.  
-  
-**Anmerkung: !! Bei der Probennahme wurden die Tubes für die Patienten 0205 und 0211 versehentlich vertauscht. Dies wurde bei diesem Schritt richtig gestellt!!**  
-  
-```{r convert edited, cache=FALSE}
-conversion<-read.delim("~/Documents/miRNA_analysen/miRNA_editing/idConversion.txt")
-
-#anpassen der sample IDs
-colnames(editedData)<-gsub("-.*", "", colnames(editedData))
-colnames(editedData)<-gsub("_.*", "", colnames(editedData))
-
-for(i in 1:length(colnames(editedData[, 1:44])))
-{
-  sampleID<-colnames(editedData)[i]
-  colnames(editedData)[i]<-conversion[which(conversion$SampleID == sampleID), 1]
-}
-editedData<-editedData[, order(colnames(editedData))]
-
-write.table(editedData, "~/Documents/miRNA_analysen/miRNA_editing/editingDepth.tab", sep = "\t")
-
-```
-
 Zuerst wird nach dem IgVH Status sortiert.
 
-```{r edit_IgVH, cache=FALSE, results='hide'}
+```{r edit_IgVH, cache=TRUE, results='hide'}
 #erstellen der Liste zum Sortieren
 clinData<-read.delim("~/Documents/2019_11_29_Revlirit_master_table.v9.txt")
-sortData<-data.frame(matrix(c(rep("NAME", 67), rep("B-CELL", 67)), 
+sortData<-data.frame(matrix(c(rep("SAMPLE", 67), rep("B-CELL", 67)), 
                             nrow = 67, 
                             ncol=2))
-sortData[1:44, 1]<-conversion[, 1]
-sortData[45:67, 1]<-colnames(editedData)[45:67]
+sortData[, 1]<-colnames(editedData)
 colnames(sortData)<-c("PatientID", "Sorting")
 
 sortData<-merge(x=sortData, 
@@ -481,7 +455,7 @@ colnames(annotation)<-"Mutations Status"
 pheatmap(editedData[,sortData$PatientID[order(sortData$Sorting, sortData$hasData)]], #durch den order Befehl können andere Cluster verfahren als von pheatmap verwendet werden
          cluster_rows = FALSE, 
          cluster_cols = FALSE, 
-         filename = "~/Documents/miRNA_analysen/miRNA_editing/graphics/editing_IgVH.pdf", 
+         filename = "~/Documents/miRNA_analysen/miRNA_editing/graphics/editing_IgVH_TAU.pdf", 
          width=10, 
          height = 6,
          annotation_col = annotation,
@@ -499,20 +473,14 @@ pheatmap(editedData[,sortData$PatientID[order(sortData$Sorting, sortData$hasData
 
 Hier wird von den gewählten miRNAs eine Expressionsheatmap erstellt.
 
-```{r expression gefilterte miRNA, cache=FALSE, results='hide'}
-readCounts<-read.delim("~/Documents/miRNA_analysen/miRNA_editing/2020_01_27_miRNA_hg38.str-ReadCount.tab")
-colnames(readCounts)[1:44]<-gsub(".miRNA_cut", "", colnames(readCounts)[1:44])
+```{r expression gefilterte miRNA, cache=TRUE, results='hide'}
+readCounts<-read.delim("~/Documents/miRNA_analysen/miRNA_editing/cut_bw1-ReadCount.tab")
+colnames(readCounts)[1:44]<-gsub(".miRNA", "", colnames(readCounts)[1:44])
 colnames(readCounts)[1:44]<-gsub("X", "", colnames(readCounts)[1:44])
-colnames(readCounts)[45:67]<-gsub("_cut", "", colnames(readCounts)[45:67])
 
-rows<-grep("MIR", rownames(readCounts))
-rownames(readCounts)[rows]<-tolower(rownames(readCounts)[rows])
-rownames(readCounts)<-gsub("mirlet", "hsa-let-", rownames(readCounts))
-rownames(readCounts)<-gsub("mir", "hsa-miR-", rownames(readCounts))
+#checked[, 3]<-gsub("-[0-9]p$", "", checked[, 1])
 
-checked[, 3]<-gsub("-[0-9]p$", "", checked[, 1])
-
-
+readCounts<-readCounts[rowSums(readCounts >= 1) >= 3, ]
 
 #-------------------------------------
 #/////////////////////////////////////
@@ -522,12 +490,11 @@ checked[, 3]<-gsub("-[0-9]p$", "", checked[, 1])
 #/////////////////////////////////////
 #-------------------------------------
 
-checked["15", 3]<-"hsa-miR-101-1"
+#checked["15", 3]<-"hsa-miR-101-1"
 
+graphData<-readCounts[mirList, ]
+graphData[graphData==0]<-0.01
 
-
-graphData<-readCounts[checked[keep, 3], ]
-graphData[graphData==0]<-0.1
 
 #mittelwert und normalisieren
 graphData$mean<-rowSums(graphData[, 45:67]) / 23
@@ -541,6 +508,8 @@ for(x in 1:ncol(editedData))
     if(is.na(editedData[y, x])) graphData[y, x]<- NA
   }
 }
+keep<-grep("hsa", rownames(graphData))
+graphData<-graphData[keep, ]
 
 #logarithmisieren
 graphData[, -68]<-log2(graphData[, -68])
@@ -551,12 +520,13 @@ pheatmap(graphData[,sortData$PatientID[order(sortData$Sorting, sortData$hasData)
          color = colorRampPalette(rev(brewer.pal(n=7, name = "RdYlBu")))(length(breaksList)),
          breaks = breaksList,
          annotation_col = annotation, 
-         filename = "~/Documents/miRNA_analysen/miRNA_editing/graphics/editedExpression.pdf",
+         filename = "~/Documents/miRNA_analysen/miRNA_editing/graphics/editedExpression_TAU.pdf",
          width=10,
          height = 6,
          border_color = NA)
 dev.off()
 ```
+
 ```{r display selected heatmap, echo=FALSE}
 pheatmap(graphData[,sortData$PatientID[order(sortData$Sorting, sortData$hasData)]],
          cluster_cols = FALSE,
@@ -690,7 +660,7 @@ In dieser Analyse wurden keine signifikanten Unterschiede festgestellt.
 
 Die Zeit bis zur ersten Behandlung sowie die progressionsfreie Zeit nach Therapie werden jeweils als Kaplan-Meier Plot dargestelle. Dabei werden die Daten in die oben berechneten Cluster sortiert.
 
-```{r kaplan-meier, cache=TRUE, results='hide'}
+```{r kaplan-meier, cache=TRUE, results='hide', eval=FALSE}
 sortData$miCluster<-res.hc$cluster
 
 kaplanmeierDataTTFT<-survfit(Surv(TTFT,TTFT_censor) ~miCluster, data=sortData)
@@ -738,7 +708,8 @@ kaplanmeierPlotPFS<-
              )
 
 ```
-```{r kaplan-meier-disp, echo=FALSE}
+
+```{r kaplan-meier-disp, echo=FALSE, eval=FALSE}
 kaplanmeierPlotTTFT
 kaplanmeierPlotPFS
 ```
@@ -748,7 +719,7 @@ kaplanmeierPlotPFS
 Hier werden die die Patienten in 2 Gruppen geteilt. Diese wird von einem Algorithmus gemacht, basierend auf der editing tiefe. Dafür werden nur Patienten verwendet, die eine mutierte IgVH haben.
 *hsa-miR-6503-3p
 
-```{r kaplan-meier edited}
+```{r kaplan-meier edited, eval=FALSE}
 # editing status
 sortData$m6503<-t(editedData)[,1]
 
@@ -807,7 +778,8 @@ kaplanmeierPlotPFS6503<-
              censor.size=9
              )
 ```
-```{r export kaplan-meier, results='hide'}
+
+```{r export kaplan-meier, results='hide', eval=FALSE}
 pdf("~/Documents/miRNA_analysen/miRNA_editing/graphics/survival.pdf")
 kaplanmeierPlotTTFT
 kaplanmeierPlotPFS
@@ -815,7 +787,8 @@ kaplanmeierPlotTTFT6503
 kaplanmeierPlotPFS6503
 dev.off()
 ```
-```{r display kaplan meier 2, echo=FALSE}
+
+```{r display kaplan meier 2, echo=FALSE, eval=FALSE}
 kaplanmeierPlotTTFT6503
 kaplanmeierPlotPFS6503
 ```
